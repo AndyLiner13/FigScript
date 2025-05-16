@@ -1,5 +1,5 @@
 {
-  "name": "figscript",
+  "name": "@andyliner13/figscript",
   "version": "0.1.0",
   "description": "A declarative, human-readable design layout language embedded in JSX that translates to Tailwind CSS.",
   "author": "Andy Liner <contact@andyliner.com>",
