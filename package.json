@@ -1,0 +1,51 @@
+{
+  "name": "figscript",
+  "version": "0.1.0",
+  "description": "A declarative, human-readable design layout language embedded in JSX that translates to Tailwind CSS.",
+  "author": "Andy Liner <contact@andyliner.com>",
+  "license": "MIT",
+  "keywords": [
+    "react",
+    "tailwindcss",
+    "figma",
+    "layout",
+    "declarative",
+    "ui"
+  ],
+  "repository": { // Optional: Link to your Git repository
+    "type": "git",
+    "url": "https://github.com/your-username/figscript.git"
+  },
+  "main": "dist/cjs/index.js", // CommonJS entry point
+  "module": "dist/esm/index.js", // ES Module entry point
+  "types": "dist/types/index.d.ts", // TypeScript type definitions
+  "files": [ // Files to include when publishing
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rollup -c", // Build script using Rollup
+    "clean": "rm -rf dist", // Script to clean the dist folder
+    "prepublishOnly": "npm run clean && npm run build" // Runs before publishing
+  },
+  "peerDependencies": { // Dependencies expected to be provided by the consuming project
+    "react": "^18.0.0 || ^19.0.0",
+    "tailwindcss": "^3.0.0"
+  },
+  "devDependencies": { // Development dependencies
+    "@rollup/plugin-commonjs": "^25.0.0",
+    "@rollup/plugin-node-resolve": "^15.0.0",
+    "@rollup/plugin-typescript": "^11.0.0",
+    "@types/react": "^18.0.0 || ^19.0.0", // Match React versions
+    "react": "^19.0.0", // Also needed for local development/testing of the package
+    "rollup": "^4.0.0",
+    "rollup-plugin-dts": "^6.0.0", // For bundling .d.ts files
+    "rollup-plugin-peer-deps-external": "^2.2.4", // Excludes peer dependencies from bundle
+    "tailwindcss": "^3.4.0", // For type checking Tailwind classes, if needed locally
+    "tslib": "^2.5.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": { // Optional: Specify Node.js version compatibility
+    "node": ">=16.0.0"
+  }
+}
