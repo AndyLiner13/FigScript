@@ -1,80 +1,134 @@
-// src/components/FigScript/FigScript.tsx
-import React, { ElementType, ReactNode, useEffect, useState } from 'react';
-import ReactDOM from 'react-dom'; // Import ReactDOM for Portals
-import { parseAutoLayout } from './parser/parseAutoLayout';
-import { parsePosition as parsePositionString } // Renamed to avoid conflict with the Position prop
-from './parser/parsePosition';
+// src/components/FigScript/FigScipt.tsx
+import React, { ElementType, ReactNode, useEffect, useState, useMemo } from 'react';
+import ReactDOM from 'react-dom';
+import { parseLayout } from './parser/parseLayout';
+import { parsePosition } from './parser/parsePosition';
 import { parseAppearance } from './parser/parseAppearance';
 import { parseFill } from './parser/parseFill';
+import { parseStroke } from './parser/parseStroke';
+import { FigScriptParseResult } from './parser/types';
 
 export interface FigScriptProps {
   children?: ReactNode;
-  AutoLayout?: string;
-  Position?: string;
-  Appearance?: string;
-  Fill?: string;
+  Position?: string; // Required in FigScript Mappings
+  Layout?: string;   // Required in FigScript Mappings
+  Appearance?: string; // Required in FigScript Mappings
+  Fill?: string;     // Optional
+  Stroke?: string;   // Optional
   as?: ElementType;
   className?: string;
+  objectName?: string; // New prop for HTML id
+  // Optional callback for development/debugging to get parsing issues
+  onParseDiagnostics?: (diagnostics: { errors: string[], warnings: string[] }) => void;
   [key: string]: any; // Allow any other HTML attributes
 }
 
 export const FigScript: React.FC<FigScriptProps> = ({
   children,
-  AutoLayout: autoLayoutString,
-  Position: positionStringProp, // Renamed to avoid conflict with the local variable
+  Position: positionString,
+  Layout: layoutString,
   Appearance: appearanceString,
   Fill: fillString,
+  Stroke: strokeString,
   as: Component = 'div',
   className: additionalClasses = '',
+  objectName,
+  onParseDiagnostics,
   ...restProps
 }) => {
-  const autoLayoutClasses = parseAutoLayout(autoLayoutString);
-  const { classes: positionClasses, isFixed } = parsePositionString(positionStringProp);
-  const appearanceClasses = parseAppearance(appearanceString);
-  const fillClasses = parseFill(fillString);
+  // Memoize parsing results to avoid re-parsing on every render if props haven't changed.
+  const {
+    allClasses,
+    isFixed,
+    errors,
+    warnings
+  } = useMemo(() => {
+    const collectedClasses: string[] = [];
+    const collectedErrors: string[] = [];
+    const collectedWarnings: string[] = [];
+    let fixedPosition = false;
 
-  // If 'isFixed' (due to 'ignore-auto-layout'), AutoLayout properties might not be desired
-  // as 'fixed' removes the item from the normal flow.
-  // However, width/height from AutoLayout (w-hug, h-100) could still be relevant.
-  // For now, we'll allow AutoLayout classes, but be mindful of conflicts.
-  // A more advanced logic could selectively filter AutoLayout classes if isFixed is true.
-  const allFigScriptClasses = isFixed
-    ? [...positionClasses, ...appearanceClasses, ...fillClasses, ...autoLayoutClasses] // Let's keep AutoLayout for w/h for now
-    : [
-        ...autoLayoutClasses,
-        ...positionClasses,
-        ...appearanceClasses,
-        ...fillClasses,
-      ];
+    // Helper to process and collect results from each parser
+    const processParser = (parser: (input?: string) => FigScriptParseResult | (FigScriptParseResult & { isFixed?: boolean }), input?: string) => {
+      const result = parser(input);
+      collectedClasses.push(...result.classes);
+      collectedErrors.push(...result.errors);
+      collectedWarnings.push(...result.warnings);
+      if ('isFixed' in result && typeof result.isFixed === 'boolean') {
+        fixedPosition = result.isFixed;
+      }
+    };
 
-  const uniqueClasses = Array.from(new Set(allFigScriptClasses));
-  const finalClassName = [...uniqueClasses, ...additionalClasses.split(' ').filter(Boolean)].join(' ');
+    // Order of parsing might matter if one parser's output could influence another,
+    // but generally, they should be independent based on their specific props.
+    // Position parser needs to run to determine `isFixed` for portal logic.
+    const positionResult = parsePosition(positionString);
+    collectedClasses.push(...positionResult.classes);
+    collectedErrors.push(...positionResult.errors);
+    collectedWarnings.push(...positionResult.warnings);
+    fixedPosition = positionResult.isFixed;
+
+    processParser(parseLayout, layoutString);
+    processParser(parseAppearance, appearanceString);
+    processParser(parseFill, fillString);
+    processParser(parseStroke, strokeString);
+
+    return {
+      allClasses: Array.from(new Set(collectedClasses)), // Ensure unique classes
+      isFixed: fixedPosition,
+      errors: collectedErrors,
+      warnings: collectedWarnings,
+    };
+  }, [positionString, layoutString, appearanceString, fillString, strokeString]);
+
+  // Log errors and warnings during development or call diagnostic callback
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development') {
+      if (errors.length > 0) {
+        console.error('FigScript Parsing Errors:', errors);
+      }
+      if (warnings.length > 0) {
+        console.warn('FigScript Parsing Warnings:', warnings);
+      }
+    }
+    if (onParseDiagnostics) {
+      onParseDiagnostics({ errors, warnings });
+    }
+  }, [errors, warnings, onParseDiagnostics]);
+
+
+  const finalClassName = [...allClasses, ...additionalClasses.split(' ').filter(Boolean)].join(' ');
+
+  const elementProps: Record<string, any> = {
+    className: finalClassName,
+    ...restProps,
+  };
+
+  if (objectName) {
+    elementProps.id = objectName;
+  }
 
   const element = (
-    <Component className={finalClassName} {...restProps}>
+    <Component {...elementProps}>
       {children}
     </Component>
   );
 
-  // State to ensure portalTarget is only accessed on the client-side
+  // State to ensure portalTarget is only accessed on the client-side for fixed elements
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
-    // document.body is only available on the client.
-    // This effect runs after the component mounts on the client.
     if (isFixed) {
+      // document.body is only available on the client.
       setPortalTarget(document.body);
+    } else {
+      setPortalTarget(null); // Reset if not fixed
     }
   }, [isFixed]);
 
-  // If isFixed is true AND we are on the client (portalTarget is set), render into portal.
   if (isFixed && portalTarget) {
     return ReactDOM.createPortal(element, portalTarget);
   }
 
-  // Otherwise, render in place (SSR, or if not fixed, or before client-side effect).
-  // If `position: fixed` CSS is sufficient without DOM moving for your needs,
-  // the portal logic can be removed, and `isFixed` would just ensure the correct CSS classes.
-  // However, "moves ... to the root of the page frame" strongly implies a DOM structure change.
   return element;
 };

@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FigScript Test Page</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+            background-color: #f0f4f8;
+        }
+        .test-container {
+            background-color: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .test-container h2 {
+            margin-top: 0;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+        }
+        .figscript-example-wrapper {
+            border: 1px dashed #ccc;
+            padding: 10px;
+            margin-top: 10px;
+            min-height: 50px; /* For visibility of positioned elements */
+            position: relative; /* For containing absolutely positioned children if not portaled */
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // --- FigScript Code (Parsers, Types, Utilities, Component) ---
+
+        // Simulate process for development logs in FigScript component
+        var process = { env: { NODE_ENV: 'development' } };
+
+        // --- From: src/components/FigScript/parser/types.ts ---
+        // (Content of types.ts would be pasted here)
+        // For brevity in this example, I'll define them directly if simple,
+        // but in a real scenario, you'd paste the full content.
+        // export interface FigScriptParseResult { ... }
+        // export type FigScriptToken = string | { key: string; value: string };
+        // export type LayoutMode = 'AUTO' | 'STANDARD' | 'UNKNOWN';
+
+
+        // --- From: src/components/FigScript/parser/utils.ts ---
+        // (Content of utils.ts would be pasted here)
+        const tokenizeFigScriptString = (inputString) => {
+          if (!inputString?.trim()) {
+            return [];
+          }
+          const tokens = inputString.split(/,(?![^()]*\))/g).map(token => token.trim()).filter(token => token.length > 0);
+          return tokens.map(token => {
+            const parts = token.split('=');
+            if (parts.length === 2) {
+              const key = parts[0].trim();
+              const value = parts[1].trim();
+              return { key, value };
+            }
+            return token;
+          });
+        };
+
+        const createParseResult = (classes = [], errors = [], warnings = []) => ({
+          classes,
+          errors,
+          warnings,
+        });
+
+        const parseNumericValue = (valueString) => {
+          if (!valueString) return null;
+          const match = valueString.match(/^(\d+(?:\.\d+)?)(px|deg|%)?$/);
+          if (match) {
+            return {
+              value: parseFloat(match[1]),
+              unit: match[2] || null,
+            };
+          }
+          if (/^\d+(?:\.\d+)?$/.test(valueString)) {
+              return {
+                  value: parseFloat(valueString),
+                  unit: null,
+              };
+          }
+          return null;
+        };
+
+        const isKeyValuePair = (token) => {
+          return typeof token === 'object' && token !== null && 'key' in token && 'value' in token;
+        };
+
+
+        // --- From: src/components/FigScript/parser/parseStroke.ts ---
+        // (Full content of parseStroke.ts)
+        const parseStroke = (strokeString) => {
+          const result = createParseResult();
+          if (!strokeString?.trim()) return result;
+          const tokens = tokenizeFigScriptString(strokeString);
+          let colorDefined = false;
+          let opacityDefined = false;
+          let weightDefined = false;
+
+          tokens.forEach(token => {
+            let key = null;
+            let value = null;
+            let isShorthand = false;
+            if (isKeyValuePair(token)) {
+              key = token.key.toLowerCase();
+              value = token.value;
+            } else {
+              value = token; isShorthand = true;
+            }
+            if (value === null) { result.errors.push(`Invalid token format: ${JSON.stringify(token)}`); return; }
+
+            if (key === 'color' || (isShorthand && (value.startsWith('#') || value.startsWith('tailwind-') || value.startsWith('border-')))) {
+              if (value.startsWith('#') && /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(value)) { result.classes.push(`border-[${value}]`); colorDefined = true; }
+              else if (value.startsWith('tailwind-')) { result.classes.push(`border-${value.substring('tailwind-'.length)}`); colorDefined = true; }
+              else if (value.startsWith('border-')) { result.classes.push(value); colorDefined = true; }
+              else { result.errors.push(`Unsupported stroke color: "${value}".`); }
+            }
+            else if (key === 'opacity' || (isShorthand && (value.endsWith('%') || /^\d+$/.test(value) || value.startsWith('opacity-')))) {
+              let opacityValueStr = value.endsWith('%') ? value.slice(0, -1) : (value.startsWith('opacity-') ? value.substring(8) : value);
+              const numeric = parseNumericValue(opacityValueStr);
+              if (numeric && numeric.unit === null && numeric.value >= 0 && numeric.value <= 100) {
+                result.classes = result.classes.filter(c => !c.startsWith('border-opacity-'));
+                result.classes.push(`border-opacity-${numeric.value}`);
+                opacityDefined = true;
+              } else { result.errors.push(`Invalid stroke opacity: "${value}".`); }
+            }
+            else if (key === 'position' || value === 'center') { /* No specific class for center */ }
+            else if (key === 'weight' || (isShorthand && (value.startsWith('all-') || ['t-','b-','l-','r-','⬆️','⬇️','⬅️','➡️'].some(p => value.startsWith(p))))) {
+                const processWeight = (wt) => {
+                    if (wt.startsWith('all-')) {
+                        const valStr = wt.substring(4); const num = parseNumericValue(valStr);
+                        if (num && num.unit === 'px') { result.classes = result.classes.filter(c => !(/^border-\[\d+px\]$/.test(c) || /^border-(t|b|l|r)/.test(c) || c.startsWith('border-w-'))); result.classes.push(`border-[${num.value}px]`); weightDefined = true;}
+                        else result.errors.push(`Invalid all weight: "${wt}".`);
+                    } else {
+                        let side, valStr;
+                        if (wt.startsWith('t-') || wt.startsWith('⬆️')) { side = 't'; valStr = wt.startsWith('t-')?wt.substring(2):wt.substring(1); }
+                        else if (wt.startsWith('b-') || wt.startsWith('⬇️')) { side = 'b'; valStr = wt.startsWith('b-')?wt.substring(2):wt.substring(1); }
+                        else if (wt.startsWith('l-') || wt.startsWith('⬅️')) { side = 'l'; valStr = wt.startsWith('l-')?wt.substring(2):wt.substring(1); }
+                        else if (wt.startsWith('r-') || wt.startsWith('➡️')) { side = 'r'; valStr = wt.startsWith('r-')?wt.substring(2):wt.substring(1); }
+                        if (side && valStr) {
+                            const num = parseNumericValue(valStr);
+                            if (num && num.unit === 'px') { result.classes = result.classes.filter(c => !(/^border-\[\d+px\]$/.test(c) || c.startsWith('border-w-'))); result.classes = result.classes.filter(c => !(c.startsWith(`border-${side}-`) || c.startsWith(`border-${side}-[`))); result.classes.push(`border-${side}-[${num.value}px]`); weightDefined = true;}
+                            else result.errors.push(`Invalid side weight: "${wt}".`);
+                        } else if (!side && key !== 'weight') result.errors.push(`Unknown weight: "${wt}".`);
+                    }
+                };
+                if (key === 'weight' && value.includes(',')) value.split(',').map(v => v.trim()).forEach(processWeight); else processWeight(value);
+            } else if (isShorthand) result.warnings.push(`Unknown Stroke token: "${value}".`);
+          });
+          if (!colorDefined) result.errors.push('Stroke "color" required.');
+          if (!weightDefined) result.errors.push('Stroke "weight" required.');
+          if (result.classes.length > 0 && !result.classes.some(c => c.startsWith('border-') || c === 'border')) {
+             if (weightDefined && colorDefined && !result.classes.some(c => c.startsWith("border-t") || c.startsWith("border-b") || c.startsWith("border-l") || c.startsWith("border-r"))) {
+                // If a general width/color is set (not specific sides), ensure 'border' class is present.
+                if(result.classes.some(c => c.startsWith("border-[") && !c.includes("-["))) { // e.g. border-[#FFF] or border-[2px]
+                    result.classes.unshift('border');
+                }
+             }
+          }
+          result.classes = Array.from(new Set(result.classes));
+          return result;
+        };
+
+        // --- From: src/components/FigScript/parser/parseAppearance.ts ---
+        // (Full content of parseAppearance.ts)
+        const parseAppearance = (appearanceString) => {
+          const result = createParseResult();
+          if (!appearanceString?.trim()) { result.warnings.push('Appearance empty, using defaults.'); return result; }
+          const tokens = tokenizeFigScriptString(appearanceString);
+          let hideDefined = false; let opacityDefined = false; let cornerRadiusDefined = false;
+          const cornerRegex = /^(all|top-left|↖️|top-right|↗️|bottom-left|↙️|bottom-right|↘️)-?(\d+)px$/;
+          const collapsedCornerAllRegex = /^🌽(\d+)px$/;
+          const collapsedCornerIndividualRegex = /^🌽\((.*)\)$/;
+
+          tokens.forEach(token => {
+            let key = null, value = null, isShorthand = false;
+            if (isKeyValuePair(token)) { key = token.key.toLowerCase(); value = token.value; }
+            else { value = token; isShorthand = true; }
+            if (value === null) { result.errors.push(`Invalid Appearance token: ${JSON.stringify(token)}`); return; }
+
+            if (key === 'hide' || (isShorthand && (value === '👁️' || value === 'HIDDEN' || value.startsWith('FALSE') || value.startsWith('TRUE')))) {
+              let isHidden = (value === 'TRUE(✅)' || value === 'TRUE' || value === 'HIDDEN' || value === '✅');
+              if (value === 'FALSE(👁️)' || value === 'FALSE' || value === '👁️') isHidden = false;
+              else if (!(value === 'TRUE(✅)' || value === 'TRUE' || value === 'HIDDEN' || value === '✅')) { result.errors.push(`Invalid hide value: "${value}".`); return; }
+              if (hideDefined) result.warnings.push(`Hide redefined. Using: "${value}".`);
+              result.classes = result.classes.filter(c => c !== 'hidden');
+              if (isHidden) result.classes.push('hidden');
+              hideDefined = true;
+            }
+            else if (key === 'opacity' || (isShorthand && (value.endsWith('%') || /^\d+$/.test(value) || value.startsWith('opacity-')))) {
+              let opacityValueStr = value.endsWith('%') ? value.slice(0, -1) : (value.startsWith('opacity-') ? value.substring(8) : value);
+              const numeric = parseNumericValue(opacityValueStr);
+              if (numeric && numeric.unit === null && numeric.value >= 0 && numeric.value <= 100) {
+                if (opacityDefined) result.warnings.push(`Opacity redefined. Using: "${value}".`);
+                result.classes = result.classes.filter(c => !c.startsWith('opacity-'));
+                result.classes.push(`opacity-${numeric.value}`);
+                opacityDefined = true;
+              } else result.errors.push(`Invalid opacity: "${value}".`);
+            }
+            else if (key === 'corner-radius' || (isShorthand && (value.startsWith('corner-') || value.startsWith('all-') || value.startsWith('🌽') || cornerRegex.test(value)))) {
+              const processRadius = (radiusVal) => {
+                const caMatch = radiusVal.match(collapsedCornerAllRegex);
+                if (caMatch) { result.classes = result.classes.filter(c => !c.startsWith('rounded-')); result.classes.push(`rounded-[${caMatch[1]}px]`); cornerRadiusDefined = true; return; }
+                const ciMatch = radiusVal.match(collapsedCornerIndividualRegex);
+                if (ciMatch) { ciMatch[1].split(',').map(t => t.trim()).forEach(processRadius); cornerRadiusDefined = true; return; }
+                const dMatch = radiusVal.match(cornerRegex);
+                if (dMatch) {
+                  const type = dMatch[1], val = dMatch[2]; let cls = '';
+                  switch (type) {
+                    case 'all': result.classes = result.classes.filter(c => !c.startsWith('rounded-')); cls = `rounded-[${val}px]`; break;
+                    case 'top-left': case '↖️': cls = `rounded-tl-[${val}px]`; break;
+                    case 'top-right': case '↗️': cls = `rounded-tr-[${val}px]`; break;
+                    case 'bottom-left': case '↙️': cls = `rounded-bl-[${val}px]`; break;
+                    case 'bottom-right': case '↘️': cls = `rounded-br-[${val}px]`; break;
+                    default: result.errors.push(`Unknown corner type: "${type}".`); return;
+                  }
+                  if (type !== 'all' && result.classes.some(c => c.startsWith('rounded-[') && !c.includes('-'))) result.classes = result.classes.filter(c => !(c.startsWith('rounded-[') && !c.includes('-')));
+                  result.classes.push(cls); cornerRadiusDefined = true;
+                } else if (!isShorthand && key === 'corner-radius') result.errors.push(`Invalid corner-radius value: "${radiusVal}".`);
+                else if (isShorthand && value.startsWith('corner-')) result.errors.push(`Malformed shorthand corner-radius: "${radiusVal}".`);
+              };
+              if (key === 'corner-radius') value.split(',').map(v => v.trim()).forEach(processRadius); else processRadius(value);
+            }
+            else if (key === 'corner-smoothing' || (isShorthand && value.includes('smoothing'))) result.warnings.push(`"corner-smoothing" ignored.`);
+            else if (isShorthand) result.warnings.push(`Unknown Appearance token: "${value}".`);
+          });
+          if (!hideDefined) { result.errors.push('"hide" required. Defaulting visible.'); }
+          if (!opacityDefined) { result.errors.push('"opacity" required. Defaulting 100%.'); result.classes.push('opacity-100'); }
+          result.classes = Array.from(new Set(result.classes));
+          return result;
+        };
+
+        // --- From: src/components/FigScript/parser/parseFill.ts ---
+        // (Full content of parseFill.ts)
+        const parseFill = (fillString) => {
+          const result = createParseResult();
+          if (!fillString?.trim()) return result;
+          const tokens = tokenizeFigScriptString(fillString);
+          let typeDefined = null, colorDefined = false, opacityDefined = false, imageUrl = null;
+
+          tokens.forEach(token => {
+            let key = null, value = null, isShorthand = false;
+            if (isKeyValuePair(token)) { key = token.key.toLowerCase(); value = token.value; }
+            else { value = token; isShorthand = true; }
+            if (value === null) { result.errors.push(`Invalid Fill token: ${JSON.stringify(token)}`); return; }
+
+            if (key === 'type' || (isShorthand && (value === 'solid' || value === 'image'))) {
+              if (value === 'solid') typeDefined = 'solid';
+              else if (value === 'image') { typeDefined = 'image'; if (colorDefined) { result.warnings.push('Color ignored for image fill.'); result.classes = result.classes.filter(c => !c.startsWith('bg-') || c.startsWith('bg-opacity-') || c.startsWith('bg-[url(')); colorDefined = false; }}
+              else result.errors.push(`Invalid fill type: "${value}".`);
+            }
+            else if (key === 'color' || (isShorthand && (value.startsWith('#') || value.startsWith('tailwind-') || value.startsWith('layer-') || value.startsWith('bg-')))) {
+              if (typeDefined === 'image') { result.warnings.push(`Color "${value}" ignored for image fill.`); return; }
+              if (colorDefined) { result.warnings.push(`Fill color redefined. Using: "${value}".`); result.classes = result.classes.filter(c => !c.startsWith('bg-') || c.startsWith('bg-opacity-') || c.startsWith('bg-[url(')); }
+              if (value.startsWith('#') && /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(value)) { result.classes.push(`bg-[${value}]`); colorDefined = true; }
+              else if (value.startsWith('tailwind-')) { result.classes.push(`bg-${value.substring('tailwind-'.length)}`); colorDefined = true; }
+              else if (value.startsWith('layer-')) { result.classes.push(`bg-${value}`); colorDefined = true; }
+              else if (value.startsWith('bg-')) { result.classes.push(value); colorDefined = true; }
+              else result.errors.push(`Unsupported fill color: "${value}".`);
+              if (colorDefined && !typeDefined) typeDefined = 'solid';
+            }
+            else if (key === 'opacity' || (isShorthand && (value.endsWith('%') || /^\d+$/.test(value) || value.startsWith('opacity-')))) {
+              let opacityValueStr = value.endsWith('%') ? value.slice(0, -1) : (value.startsWith('opacity-') ? value.substring(8) : value);
+              const numeric = parseNumericValue(opacityValueStr);
+              if (numeric && numeric.unit === null && numeric.value >= 0 && numeric.value <= 100) {
+                if (opacityDefined) result.warnings.push(`Fill opacity redefined. Using: "${value}".`);
+                result.classes = result.classes.filter(c => !c.startsWith('bg-opacity-'));
+                result.classes.push(`bg-opacity-${numeric.value}`); opacityDefined = true;
+              } else result.errors.push(`Invalid fill opacity: "${value}".`);
+            }
+            else if (key === 'url' || (isShorthand && (value.startsWith('url(') || value.startsWith('http') || value.startsWith('/')))) {
+              if (typeDefined !== 'image') {
+                if (typeDefined !== 'solid') { typeDefined = 'image'; result.warnings.push('Type set to image due to URL.');}
+                else { result.warnings.push(`URL "${value}" ignored, type is solid.`); return;}
+              }
+              let parsedUrl = value.startsWith('url(') && value.endsWith(')') ? value.substring(4, value.length -1) : value;
+              if ((parsedUrl.startsWith("'") && parsedUrl.endsWith("'")) || (parsedUrl.startsWith('"') && parsedUrl.endsWith('"'))) parsedUrl = parsedUrl.substring(1, parsedUrl.length - 1);
+              imageUrl = parsedUrl; result.classes = result.classes.filter(c => !c.startsWith('bg-[url(')); result.classes.push(`bg-[url('${imageUrl}')]`);
+              if (!result.classes.some(c => c.startsWith('bg-cover') || c.startsWith('bg-contain'))) { result.classes.push('bg-cover', 'bg-center', 'bg-no-repeat'); result.warnings.push('Added default bg-cover/center/no-repeat for image.');}
+            }
+            else if (isShorthand) result.warnings.push(`Unknown Fill token: "${value}".`);
+          });
+          if (!typeDefined) result.errors.push('Fill "type" required.');
+          if (typeDefined === 'solid' && !colorDefined) result.errors.push('Fill "color" required for solid type.');
+          if (typeDefined === 'image' && !imageUrl) result.errors.push('Image URL required for image type.');
+          if (!opacityDefined) { result.errors.push('Fill "opacity" required. Defaulting 100%.'); result.classes.push('bg-opacity-100');}
+          result.classes = Array.from(new Set(result.classes));
+          return result;
+        };
+
+        // --- From: src/components/FigScript/parser/parsePosition.ts ---
+        // (Full content of parsePosition.ts)
+        const parsePosition = (positionString) => {
+          const baseResult = createParseResult();
+          let isFixed = false;
+          if (!positionString?.trim()) { baseResult.errors.push('Position required.'); return { ...baseResult, isFixed }; }
+          const tokens = tokenizeFigScriptString(positionString);
+          let ignoreAutoLayout = null, rotationDefined = false;
+          const alignmentValues = {}, positionValues = {}, constraintValues = {};
+          const transformClasses = [], positionOffsetClasses = [], explicitPositionClasses = [];
+          let zIndexClass = null;
+
+          tokens.forEach(token => {
+            let key = null, value = null, isShorthand = false;
+            if (isKeyValuePair(token)) { key = token.key.toLowerCase(); value = token.value; }
+            else { value = token; isShorthand = true; }
+            if (value === null) { baseResult.errors.push(`Invalid Position token: ${JSON.stringify(token)}`); return; }
+
+            if (key === 'ignore-auto-layout' || (isShorthand && (value === '✅' || value === 'TRUE' || value === '❌' || value === 'FALSE'))) {
+              if (ignoreAutoLayout !== null) baseResult.warnings.push(`ignore-auto-layout redefined. Using: "${value}".`);
+              if (value === 'TRUE(✅)' || value === 'TRUE' || value === '✅') { ignoreAutoLayout = true; isFixed = true; if(!explicitPositionClasses.includes('fixed')) explicitPositionClasses.push('fixed');}
+              else if (value === 'FALSE(❌)' || value === 'FALSE' || value === '❌') { ignoreAutoLayout = false; isFixed = false; }
+              else baseResult.errors.push(`Invalid ignore-auto-layout: "${value}".`);
+            }
+            else if (key === 'rotation' || (isShorthand && (value.startsWith('r-') || value === 'flip-h' || value === 'flip-v'))) {
+              const processRotation = (rotVal) => {
+                if (rotVal.startsWith('r-')) {
+                  if (rotVal === 'r-90') transformClasses.push('rotate-90');
+                  else if (rotVal === 'r-180') transformClasses.push('rotate-180');
+                  else if (rotVal === 'r-270') transformClasses.push('-rotate-90');
+                  else { const angle = parseNumericValue(rotVal.substring(2)); if (angle && (angle.unit === 'deg' || angle.unit === null)) transformClasses.push(`rotate-[${angle.value}deg]`); else baseResult.errors.push(`Invalid rotation angle: "${rotVal}".`);}
+                } else if (rotVal === 'flip-h') transformClasses.push('scale-x-[-1]');
+                else if (rotVal === 'flip-v') transformClasses.push('scale-y-[-1]');
+                else baseResult.errors.push(`Unknown rotation token: "${rotVal}".`);
+                rotationDefined = true;
+              };
+              if (key === 'rotation') value.split(',').map(v => v.trim()).forEach(processRotation); else processRotation(value);
+            }
+            else if (key === 'alignment' || (isShorthand && value.startsWith('align-'))) {
+              const processAlignment = (alignVal) => {
+                if (alignVal === 'align-left' || alignVal === '⬅️') alignmentValues.h = 'left';
+                else if (alignVal === 'align-right' || alignVal === '➡️') alignmentValues.h = 'right';
+                else if (alignVal === 'align-top' || alignVal === '⬆️') alignmentValues.v = 'top';
+                else if (alignVal === 'align-bottom' || alignVal === '⬇️') alignmentValues.v = 'bottom';
+                else baseResult.errors.push(`Invalid alignment token: "${alignVal}".`);
+              };
+              if (key === 'alignment') value.split(',').map(v => v.trim()).forEach(processAlignment); else processAlignment(value);
+            }
+            else if (key === 'position' || (isShorthand && (value.startsWith('x-') || value.startsWith('y-')))) {
+              const processXY = (xyVal) => {
+                if (xyVal.startsWith('x-')) { const num = parseNumericValue(xyVal.substring(2)); if (num && num.unit === 'px') positionValues.x = `${num.value}px`; else baseResult.errors.push(`Invalid x pos: "${xyVal}".`);}
+                else if (xyVal.startsWith('y-')) { const num = parseNumericValue(xyVal.substring(2)); if (num && num.unit === 'px') positionValues.y = `${num.value}px`; else baseResult.errors.push(`Invalid y pos: "${xyVal}".`);}
+                else baseResult.errors.push(`Invalid x/y token: "${xyVal}".`);
+              };
+              if (key === 'position') value.split(',').map(v => v.trim()).forEach(processXY); else processXY(value);
+            }
+            else if (key === 'constraints' || (isShorthand && (value.startsWith('h-') || value.startsWith('v-')))) {
+              const processConstraint = (conVal) => {
+                if (conVal.startsWith('h-')) constraintValues.h = conVal.substring(2);
+                else if (conVal.startsWith('v-')) constraintValues.v = conVal.substring(2);
+                else baseResult.errors.push(`Invalid constraint: "${conVal}".`);
+              };
+              if (key === 'constraints') value.split(',').map(v => v.trim()).forEach(processConstraint); else processConstraint(value);
+            }
+            else if (isShorthand && value.startsWith('z-')) {
+              const zNum = value.substring(2);
+              if (/^\d+$/.test(zNum) && Number(zNum) % 10 === 0 && Number(zNum) >=0 && Number(zNum) <=50) { if (zIndexClass) baseResult.warnings.push(`Z-index redefined. Using: "${value}".`); zIndexClass = value; }
+              else if (/^\d+$/.test(zNum)) { if (zIndexClass) baseResult.warnings.push(`Z-index redefined. Using: "${value}".`); zIndexClass = `z-[${zNum}]`;}
+              else baseResult.errors.push(`Invalid z-index: "${value}".`);
+            }
+            else if (isShorthand) baseResult.warnings.push(`Unknown Position token: "${value}".`);
+          });
+
+          if (ignoreAutoLayout === null) { baseResult.errors.push('"ignore-auto-layout" required. Defaulting FALSE.'); ignoreAutoLayout = false; isFixed = false; }
+          if (!rotationDefined) baseResult.errors.push('"rotation" required.');
+
+          if (ignoreAutoLayout === true) {
+            if (alignmentValues.h === 'left') positionOffsetClasses.push('left-0');
+            if (alignmentValues.h === 'right') positionOffsetClasses.push('right-0');
+            if (alignmentValues.v === 'top') positionOffsetClasses.push('top-0');
+            if (alignmentValues.v === 'bottom') positionOffsetClasses.push('bottom-0');
+            if (positionValues.x) positionOffsetClasses.push(`left-[${positionValues.x}]`);
+            if (positionValues.y) positionOffsetClasses.push(`top-[${positionValues.y}]`);
+
+            if (constraintValues.h === 'left' && !positionOffsetClasses.includes('right-0')) positionOffsetClasses.push('left-0');
+            else if (constraintValues.h === 'right' && !positionOffsetClasses.includes('left-0')) positionOffsetClasses.push('right-0');
+            else if (constraintValues.h === 'left-right') { positionOffsetClasses.push('left-0', 'right-0'); }
+            else if (constraintValues.h === 'center') { positionOffsetClasses.push('left-1/2'); transformClasses.push('-translate-x-1/2'); }
+            else if (constraintValues.h === 'scale') baseResult.classes.push('w-full');
+            if (constraintValues.v === 'top' && !positionOffsetClasses.includes('bottom-0')) positionOffsetClasses.push('top-0');
+            else if (constraintValues.v === 'bottom' && !positionOffsetClasses.includes('top-0')) positionOffsetClasses.push('bottom-0');
+            else if (constraintValues.v === 'top-bottom') { positionOffsetClasses.push('top-0', 'bottom-0'); }
+            else if (constraintValues.v === 'center') { positionOffsetClasses.push('top-1/2'); transformClasses.push('-translate-y-1/2'); }
+            else if (constraintValues.v === 'scale') baseResult.classes.push('h-full');
+            if (!zIndexClass && explicitPositionClasses.includes('fixed')) zIndexClass = 'z-50';
+          } else {
+            if (Object.keys(alignmentValues).length > 0) baseResult.errors.push('Alignment only for ignore-auto-layout=TRUE.');
+            if (Object.keys(positionValues).length > 0) baseResult.errors.push('Position (x,y) only for ignore-auto-layout=TRUE.');
+            if (Object.keys(constraintValues).length > 0) baseResult.errors.push('Constraints only for ignore-auto-layout=TRUE.');
+            if(zIndexClass && !explicitPositionClasses.includes('relative') && !isFixed) { explicitPositionClasses.push('relative'); baseResult.warnings.push("Added 'relative' for z-index without ignore-auto-layout=TRUE.");}
+          }
+          if (zIndexClass) baseResult.classes.push(zIndexClass);
+          baseResult.classes.push(...explicitPositionClasses, ...positionOffsetClasses, ...transformClasses);
+          baseResult.classes = Array.from(new Set(baseResult.classes));
+          return { ...baseResult, isFixed };
+        };
+
+        // --- From: src/components/FigScript/parser/parseLayout.ts ---
+        // (Full content of parseLayout.ts)
+        const parseLayout = (layoutString) => {
+          const result = createParseResult();
+          if (!layoutString?.trim()) { result.errors.push('Layout required.'); return result; }
+          let mode = 'UNKNOWN'; let processedLayoutString = layoutString;
+          if (layoutString.startsWith('Auto{') && layoutString.endsWith('}')) { mode = 'AUTO'; processedLayoutString = layoutString.substring(5, layoutString.length - 1); }
+          // Basic inference if not explicit Auto{...}
+          const tokens = tokenizeFigScriptString(processedLayoutString);
+          if (mode === 'UNKNOWN') {
+            const hasAutoKeywords = tokens.some(t => { const v = isKeyValuePair(t)?t.key:t; return typeof v === 'string' && (v.includes('flow')||v.includes('gap')||v.includes('fill')||v.includes('hug')||['↕️','↔️','↩️','🔯'].includes(v));});
+            mode = hasAutoKeywords ? 'AUTO' : 'STANDARD';
+            result.warnings.push(`Layout mode inferred as ${mode}. Use "Auto{...}" for explicit Auto Layout.`);
+          }
+
+          const dimensionClasses = [], paddingClasses = [], spacingClasses = [], flowClasses = [], alignmentClasses = [];
+          let clipContent = false, gapClass = null, settingsAlignBaseline = false;
+          const addDimensionClass = (cls) => dimensionClasses.push(cls);
+
+          tokens.forEach(token => {
+            let key = null, value = null, isShorthand = false;
+            if (isKeyValuePair(token)) { key = token.key.toLowerCase(); value = token.value; }
+            else { value = token; isShorthand = true; }
+            if (value === null) { result.errors.push(`Invalid Layout token: ${JSON.stringify(token)}`); return; }
+
+            if (key === 'dimensions' || (isShorthand && (value.startsWith('w-') || value.startsWith('h-') || value.startsWith('min-w-') || value.startsWith('max-w-') || value.startsWith('min-h-') || value.startsWith('max-h-')))) {
+              const processDim = (dimVal) => {
+                if (dimVal.startsWith('w-')) {
+                  if (dimVal === 'w-fill' && mode === 'AUTO') addDimensionClass('w-full');
+                  else if (dimVal === 'w-hug' && mode === 'AUTO') addDimensionClass('w-auto');
+                  else if (dimVal.startsWith('w-') && parseNumericValue(dimVal.substring(2))?.unit === 'px') addDimensionClass(`w-[${dimVal.substring(2)}]`);
+                  else if (dimVal.startsWith('w-') && /^\d+\/\d+$/.test(dimVal.substring(2))) addDimensionClass(dimVal);
+                  else if (mode === 'STANDARD' && (dimVal === 'w-fill' || dimVal === 'w-hug')) result.errors.push(`w-fill/hug only for Auto Layout.`);
+                  else if (isShorthand) addDimensionClass(dimVal); else result.errors.push(`Invalid width: "${dimVal}".`);
+                } else if (dimVal.startsWith('h-')) {
+                  if (dimVal === 'h-fill' && mode === 'AUTO') addDimensionClass('h-full');
+                  else if (dimVal === 'h-hug' && mode === 'AUTO') addDimensionClass('h-auto');
+                  else if (dimVal.startsWith('h-') && parseNumericValue(dimVal.substring(2))?.unit === 'px') addDimensionClass(`h-[${dimVal.substring(2)}]`);
+                  else if (dimVal.startsWith('h-') && /^\d+\/\d+$/.test(dimVal.substring(2))) addDimensionClass(dimVal);
+                  else if (mode === 'STANDARD' && (dimVal === 'h-fill' || dimVal === 'h-hug')) result.errors.push(`h-fill/hug only for Auto Layout.`);
+                  else if (isShorthand) addDimensionClass(dimVal); else result.errors.push(`Invalid height: "${dimVal}".`);
+                } else if (mode === 'AUTO') {
+                  if (dimVal.startsWith('min-w-')) addDimensionClass(`min-w-[${dimVal.substring(6)}]`);
+                  else if (dimVal.startsWith('max-w-')) addDimensionClass(`max-w-[${dimVal.substring(6)}]`);
+                  else if (dimVal.startsWith('min-h-')) addDimensionClass(`min-h-[${dimVal.substring(6)}]`);
+                  else if (dimVal.startsWith('max-h-')) addDimensionClass(`max-h-[${dimVal.substring(6)}]`);
+                  else result.errors.push(`Invalid Auto dim: "${dimVal}".`);
+                } else result.errors.push(`Min/max dims only for Auto. Invalid: "${dimVal}".`);
+              };
+              if (key === 'dimensions') value.split(',').map(v => v.trim()).forEach(processDim); else processDim(value);
+            }
+            else if (key === 'clip-content' || (isShorthand && (value === '✂️' || value === 'TRUE' || value === 'FALSE'))) {
+              if (value === 'TRUE(✂️)' || value === 'TRUE' || value === '✂️') clipContent = true;
+              else if (value === 'FALSE') clipContent = false; else result.errors.push(`Invalid clip-content: "${value}".`);
+            }
+            else if (mode === 'STANDARD' && (key === 'spacing' || (isShorthand && (value.startsWith('v-') || value.startsWith('h-'))))) {
+              const processSpacing = (sVal) => {
+                if (sVal.startsWith('v-')) { const n = parseNumericValue(sVal.substring(2)); if (n && n.unit==='px') spacingClasses.push(`space-y-[${n.value}px]`); else result.errors.push(`Invalid v-spacing: "${sVal}".`);}
+                else if (sVal.startsWith('h-')) { const n = parseNumericValue(sVal.substring(2)); if (n && n.unit==='px') spacingClasses.push(`space-x-[${n.value}px]`); else result.errors.push(`Invalid h-spacing: "${sVal}".`);}
+                else result.errors.push(`Unknown spacing: "${sVal}".`);
+              };
+              if (key === 'spacing') value.split(',').map(v => v.trim()).forEach(processSpacing); else processSpacing(value);
+            }
+            else if (mode === 'AUTO') {
+              if (key === 'flow' || (isShorthand && (value === 'vertical' || value === '↕️' || value === 'horizontal' || value === '↔️' || value === 'wrap' || value === '↩️'))) {
+                const processFlow = (fVal) => {
+                  if (fVal === 'vertical' || fVal === '↕️') flowClasses.push('flex-col');
+                  else if (fVal === 'horizontal' || fVal === '↔️') flowClasses.push('flex-row');
+                  else if (fVal === 'wrap' || fVal === '↩️') { if (flowClasses.includes('flex-row')) flowClasses.push('flex-wrap'); else result.errors.push(`"wrap" only with "horizontal" flow.`);}
+                  else result.errors.push(`Unknown flow: "${fVal}".`);
+                };
+                if (key === 'flow') value.split(',').map(v => v.trim()).forEach(processFlow); else processFlow(value);
+              }
+              else if (key === 'alignment' || (isShorthand && ['↖️','⬆️','↗️','⬅️','🔯','➡️','↙️','⬇️','↘️'].includes(value))) {
+                alignmentClasses.length = 0;
+                switch (value) {
+                  case '↖️': alignmentClasses.push('justify-start', 'items-start'); break; case '⬆️': alignmentClasses.push('justify-center', 'items-start'); break;
+                  case '↗️': alignmentClasses.push('justify-end', 'items-start'); break; case '⬅️': alignmentClasses.push('justify-start', 'items-center'); break;
+                  case '🔯': alignmentClasses.push('justify-center', 'items-center'); break; case '➡️': alignmentClasses.push('justify-end', 'items-center'); break;
+                  case '↙️': alignmentClasses.push('justify-start', 'items-end'); break; case '⬇️': alignmentClasses.push('justify-center', 'items-end'); break;
+                  case '↘️': alignmentClasses.push('justify-end', 'items-end'); break; default: result.errors.push(`Invalid align emoji: "${value}".`);
+                }
+              }
+              else if (key === 'gap' || (isShorthand && (value.startsWith('gap-') || parseNumericValue(value)?.unit === 'px' || value === 'auto'))) {
+                let gapVal = isShorthand && value.startsWith('gap-') ? value.substring(4) : value;
+                if (gapVal === 'auto') gapClass = 'justify-between';
+                else { const n = parseNumericValue(gapVal); if (n && n.unit === 'px') gapClass = `gap-[${n.value}px]`; else result.errors.push(`Invalid gap: "${value}".`);}
+              }
+              else if (key === 'padding' || (isShorthand && (value.startsWith('p-') || value.startsWith('px-') || value.startsWith('py-') || value.startsWith('pt-') || value.startsWith('pb-') || value.startsWith('pl-') || value.startsWith('pr-') || value.startsWith('all-')))) {
+                const processPad = (pVal) => {
+                  let cls = '';
+                  if (pVal.startsWith('all-')) cls = `p-[${pVal.substring(4)}]`;
+                  else if (pVal.startsWith('h-')) cls = `px-[${pVal.substring(2)}]`; else if (pVal.startsWith('v-')) cls = `py-[${pVal.substring(2)}]`;
+                  else if (pVal.startsWith('l-')) cls = `pl-[${pVal.substring(2)}]`; else if (pVal.startsWith('r-')) cls = `pr-[${pVal.substring(2)}]`;
+                  else if (pVal.startsWith('t-')) cls = `pt-[${pVal.substring(2)}]`; else if (pVal.startsWith('b-')) cls = `pb-[${pVal.substring(2)}]`;
+                  else if (['p-','px-','py-','pt-','pb-','pl-','pr-'].some(prefix => pVal.startsWith(prefix))) cls = pVal;
+                  else { result.errors.push(`Invalid padding: "${pVal}".`); return; }
+                  paddingClasses.push(cls); // Simplified: no complex override logic here
+                };
+                if (key === 'padding') value.split(',').map(v => v.trim()).forEach(processPad); else processPad(value);
+              }
+              else if (key === 'settings' || (isShorthand && value.includes('align-text-baseline'))) {
+                if (value.includes('align-text-baseline') || value === '✅') settingsAlignBaseline = true;
+                if (value.includes('strokes-included') || value.includes('canvas-stacking')) result.warnings.push(`Layout settings "${value}" ignored.`);
+              }
+              else if (isShorthand && mode === 'AUTO') result.warnings.push(`Unknown Auto Layout token: "${value}".`);
+            }
+            else if (isShorthand) result.warnings.push(`Unknown Layout token: "${value}" for ${mode} mode.`);
+          });
+
+          result.classes.push(...dimensionClasses);
+          if (clipContent) result.classes.push('overflow-hidden');
+          if (mode === 'STANDARD') {
+            result.classes.push(...spacingClasses);
+            if (flowClasses.length || alignmentClasses.length || gapClass || paddingClasses.length || settingsAlignBaseline) result.errors.push("Auto Layout props ignored in Standard mode.");
+          } else { // AUTO
+            if (flowClasses.length || alignmentClasses.length || gapClass || settingsAlignBaseline) { if (!result.classes.includes('flex')) result.classes.unshift('flex');}
+            result.classes.push(...flowClasses, ...alignmentClasses);
+            if (gapClass) result.classes.push(gapClass);
+            if (settingsAlignBaseline) { if (!alignmentClasses.some(c=>c.startsWith('items-'))) result.classes.push('items-baseline'); else result.warnings.push("align-text-baseline may be overridden by items-*.");}
+            result.classes.push(...paddingClasses);
+            if (spacingClasses.length) result.errors.push("Standard 'spacing' not for Auto Layout. Use 'gap'/'padding'.");
+          }
+          if (mode === 'AUTO') {
+            if (!flowClasses.some(fc => fc === 'flex-col' || fc === 'flex-row')) result.errors.push('Auto Layout "flow" (vertical/horizontal) required.');
+            if (!alignmentClasses.length) result.warnings.push('Auto Layout "alignment" not set. Using defaults.');
+            if (!gapClass) result.warnings.push('Auto Layout "gap" not set. Using no gap.');
+          }
+          if (!dimensionClasses.length) result.errors.push('Layout "dimensions" (w,h) required.');
+          result.classes = Array.from(new Set(result.classes));
+          return result;
+        };
+
+
+        // --- From: src/components/FigScript/FigScipt.tsx ---
+        // (Content of FigScript.tsx, slightly adapted for this self-contained example)
+        // Note: React, ReactDOM are globally available from CDN
+        const FigScript = ({
+          children,
+          Position: positionString,
+          Layout: layoutString,
+          Appearance: appearanceString,
+          Fill: fillString,
+          Stroke: strokeString,
+          as: Component = 'div',
+          className: additionalClasses = '',
+          objectName,
+          onParseDiagnostics,
+          ...restProps
+        }) => {
+          const {
+            allClasses,
+            isFixed,
+            errors,
+            warnings
+          } = React.useMemo(() => {
+            const collectedClasses = [];
+            const collectedErrors = [];
+            const collectedWarnings = [];
+            let fixedPosition = false;
+
+            const processParser = (parser, input) => {
+              const result = parser(input);
+              collectedClasses.push(...result.classes);
+              collectedErrors.push(...result.errors);
+              collectedWarnings.push(...result.warnings);
+              // 'isFixed' is only in parsePosition's direct return, not nested
+            };
+            
+            const positionResult = parsePosition(positionString);
+            collectedClasses.push(...positionResult.classes);
+            collectedErrors.push(...positionResult.errors);
+            collectedWarnings.push(...positionResult.warnings);
+            fixedPosition = positionResult.isFixed; // Directly assign from positionResult
+
+            processParser(parseLayout, layoutString);
+            processParser(parseAppearance, appearanceString);
+            processParser(parseFill, fillString);
+            processParser(parseStroke, strokeString);
+
+            return {
+              allClasses: Array.from(new Set(collectedClasses)),
+              isFixed: fixedPosition,
+              errors: collectedErrors,
+              warnings: collectedWarnings,
+            };
+          }, [positionString, layoutString, appearanceString, fillString, strokeString]);
+
+          React.useEffect(() => {
+            if (process.env.NODE_ENV === 'development') {
+              if (errors.length > 0) console.error('FigScript Errors:', objectName || 'Unnamed', errors);
+              if (warnings.length > 0) console.warn('FigScript Warnings:', objectName || 'Unnamed', warnings);
+            }
+            if (onParseDiagnostics) onParseDiagnostics({ errors, warnings });
+          }, [errors, warnings, onParseDiagnostics, objectName]);
+
+          const finalClassName = [...allClasses, ...additionalClasses.split(' ').filter(Boolean)].join(' ');
+          const elementProps = { className: finalClassName, ...restProps };
+          if (objectName) elementProps.id = objectName;
+
+          const element = React.createElement(Component, elementProps, children);
+
+          const [portalTarget, setPortalTarget] = React.useState(null);
+          React.useEffect(() => {
+            if (isFixed) setPortalTarget(document.body);
+            else setPortalTarget(null);
+          }, [isFixed]);
+
+          if (isFixed && portalTarget) return ReactDOM.createPortal(element, portalTarget);
+          return element;
+        };
+
+
+        // --- React App Component ---
+        const App = () => {
+          const handleDiagnostics = (id, diagnostics) => {
+            console.log(`Diagnostics for ${id}:`, diagnostics);
+          };
+
+          return (
+            React.createElement('div', null,
+              React.createElement('h1', { className: 'text-3xl font-bold mb-6 text-center text-slate-700' }, 'FigScript Component Tests'),
+
+              // Test Case 1: Auto Layout - Flex Row
+              React.createElement('div', { className: 'test-container' },
+                React.createElement('h2', { className: 'text-xl font-semibold text-slate-600' }, 'Auto Layout: Flex Row, Gap, Padding'),
+                React.createElement(FigScript, {
+                  objectName: 'autoLayoutRow',
+                  Layout: 'Auto{flow=horizontal(↔️), gap=10px, padding=all-15px, alignment=🔯}',
+                  Appearance: 'hide=FALSE(👁️), opacity=100, corner-radius=all-8px',
+                  Fill: 'type=solid, color=tailwind-blue-100, opacity=100',
+                  onParseDiagnostics: (diag) => handleDiagnostics('autoLayoutRow', diag)
+                },
+                  React.createElement(FigScript, { Layout: 'dimensions={w-100px, h-50px}', Fill: 'color=tailwind-blue-500', Appearance:'corner-radius=all-4px' }, 'Box 1'),
+                  React.createElement(FigScript, { Layout: 'dimensions={w-150px, h-50px}', Fill: 'color=tailwind-blue-600', Appearance:'corner-radius=all-4px' }, 'Box 2')
+                )
+              ),
+
+              // Test Case 2: Fixed Position Element
+              React.createElement('div', { className: 'test-container' },
+                React.createElement('h2', { className: 'text-xl font-semibold text-slate-600' }, 'Fixed Position & Rotation'),
+                 React.createElement('div', {className: 'figscript-example-wrapper relative h-40 bg-slate-50'},
+                    React.createElement(FigScript, {
+                      objectName: 'fixedElement',
+                      Position: 'ignore-auto-layout=TRUE(✅), alignment=align-right(➡️), position={y-20px, x-20px}, rotation={r-15}, z-10',
+                      Layout: 'dimensions={w-120px, h-60px}',
+                      Fill: 'type=solid, color=tailwind-red-500, opacity=100',
+                      Appearance: 'hide=FALSE(👁️), opacity=90, corner-radius=all-5px',
+                      Stroke: 'color=#000000, weight=all-2px, opacity=100',
+                      onParseDiagnostics: (diag) => handleDiagnostics('fixedElement', diag)
+                    }, 'Fixed & Rotated')
+                 )
+              ),
+
+              // Test Case 3: Appearance and Fill
+              React.createElement('div', { className: 'test-container' },
+                React.createElement('h2', { className: 'text-xl font-semibold text-slate-600' }, 'Appearance & Fill'),
+                React.createElement(FigScript, {
+                  objectName: 'appearanceTest',
+                  Layout: 'dimensions={w-200px, h-100px}',
+                  Appearance: 'hide=FALSE(👁️), opacity=70, corner-radius={top-left-20px(↖️), bottom-right-20px(↘️)}',
+                  Fill: 'type=solid, color=tailwind-green-500, opacity=80',
+                  onParseDiagnostics: (diag) => handleDiagnostics('appearanceTest', diag)
+                }, 'Opacity & Corners')
+              ),
+
+              // Test Case 4: Stroke
+              React.createElement('div', { className: 'test-container' },
+                React.createElement('h2', { className: 'text-xl font-semibold text-slate-600' }, 'Stroke Test'),
+                React.createElement(FigScript, {
+                  objectName: 'strokeTest',
+                  Layout: 'dimensions={w-150px, h-75px}',
+                  Appearance: 'hide=FALSE(👁️), opacity=100',
+                  Fill: 'type=solid, color=tailwind-yellow-100, opacity=100',
+                  Stroke: 'color=tailwind-orange-500, weight={t-4px(⬆️), r-8px(➡️)}, opacity=100',
+                  onParseDiagnostics: (diag) => handleDiagnostics('strokeTest', diag)
+                }, 'Stroke')
+              ),
+
+              // Test Case 5: Standard Layout (Non-Auto)
+              React.createElement('div', { className: 'test-container' },
+                React.createElement('h2', { className: 'text-xl font-semibold text-slate-600' }, 'Standard Layout: Spacing'),
+                React.createElement(FigScript, {
+                  objectName: 'standardLayout',
+                  Layout: 'dimensions={w-fill}, spacing={h-10px}', // space-x between children
+                  Appearance: 'hide=FALSE(👁️), opacity=100',
+                  Fill: 'type=solid, color=tailwind-purple-100, opacity=100',
+                  className: 'flex', // Manually add flex for standard layout spacing to work as expected with children
+                  onParseDiagnostics: (diag) => handleDiagnostics('standardLayout', diag)
+                },
+                  React.createElement(FigScript, { Layout: 'dimensions={w-80px, h-40px}', Fill: 'color=tailwind-purple-500' }, 'Item A'),
+                  React.createElement(FigScript, { Layout: 'dimensions={w-80px, h-40px}', Fill: 'color=tailwind-purple-600' }, 'Item B')
+                )
+              ),
+              
+              // Test Case 6: Image Fill
+              React.createElement('div', { className: 'test-container' },
+                React.createElement('h2', { className: 'text-xl font-semibold text-slate-600' }, 'Image Fill Test'),
+                React.createElement(FigScript, {
+                  objectName: 'imageFillTest',
+                  Layout: 'dimensions={w-200px, h-150px}',
+                  Appearance: 'hide=FALSE(👁️), opacity=100, corner-radius=all-10px',
+                  Fill: 'type=image, url=https://placehold.co/600x400/007bff/white?text=FigScript+Image, opacity=90',
+                  Stroke: 'color=tailwind-gray-700, weight=all-3px',
+                  onParseDiagnostics: (diag) => handleDiagnostics('imageFillTest', diag)
+                })
+              ),
+
+              // Test Case 7: Error case - missing required fields
+               React.createElement('div', { className: 'test-container' },
+                React.createElement('h2', { className: 'text-xl font-semibold text-slate-600' }, 'Error Case Example'),
+                React.createElement(FigScript, {
+                  objectName: 'errorTest',
+                  // Missing Layout, Position, Appearance which are typically required by your spec
+                  Fill: 'type=solid, color=red', // Invalid color
+                  Stroke: 'weight=all-1px', // Missing color
+                  onParseDiagnostics: (diag) => handleDiagnostics('errorTest', diag)
+                }, 'Error Test')
+              )
+            )
+          );
+        };
+
+        // --- Render React App ---
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+
+    </script>
+</body>
+</html>
