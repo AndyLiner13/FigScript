@@ -7,5 +7,4 @@ FigScript is a declarative, human-readable design layout language embedded in JS
 ## Installation
 
 ```bash
-<<<<<<< HEAD
 npm install @AndyLiner/figscript
